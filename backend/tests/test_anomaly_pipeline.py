@@ -197,6 +197,16 @@ def test_poi_buffer_is_network_distance_not_straight_line():
     assert hit["segR2"][2] == "hospital"
 
 
+def test_poi_too_far_from_network_is_ignored():
+    net = mini_net()
+    cfg = {**CFG_MIN, "anomaly": {**CFG_MIN["anomaly"],
+                                  "poi_snap_max_distance_m": 100.0}}
+    poi = {"poi_id": "far", "poi_type": "hospital", "lat": 26.01,
+           "lon": 78.0, "name": "Far hospital"}
+    idx, _ = mm._bbox_segments(net["segments"])
+    assert prio.poi_impact(poi, net, idx, cfg) == {}
+
+
 def test_priority_formula_components_and_order():
     s = Store("sqlite:///" + str(Path(tempfile.mkdtemp()) / "prio.db"))
     ensure_tables(s)
@@ -219,6 +229,29 @@ def test_priority_formula_components_and_order():
     assert cb["poi"] == 1.0 and cb["vulnerable"] == 1.0   # hospital on segR2
     assert ca["road_class"] == 0.8 and cb["road_class"] == 0.4
     assert ra["priority"] < rb["priority"]
+
+
+def test_priority_uses_boundary_excluded_trips_and_blended_severity():
+    s = Store("sqlite:///" + str(Path(tempfile.mkdtemp()) / "terms.db"))
+    ensure_tables(s)
+    net = mini_net()
+    rn.save_to_store(s, net)
+    _plant_events(s, "segA", ["e1", "e2", "e3"], 26.0005, 78.0)
+    agg.compute(s, CFG_MIN)
+    s.conn.execute(
+        "UPDATE segment_stats SET sev_mean=0.2, sev_p95=0.8, components=?"
+        " WHERE segment_id='segA'",
+        ('{"solid_trip_count":1,"boundary_events":2}',))
+    s.conn.commit()
+    cfg = {**CFG_MIN, "anomaly": {**CFG_MIN["anomaly"],
+                                  "severity_p95_weight": 0.7}}
+    prio.compute(s, net, cfg)
+    row = dict(s.conn.execute(
+        "SELECT * FROM segment_stats WHERE segment_id='segA'").fetchone())
+    terms = __import__("json").loads(row["components"])["priority_terms"]
+    assert terms["severity"] == 0.62
+    assert terms["frequency"] == pytest.approx(1 / 3, abs=1e-4)
+    assert terms["solid_trip_count"] == 1
 
 
 def test_priority_weights_respect_formula():
@@ -280,10 +313,13 @@ def test_roads_end_to_end(client):
     props = geo["features"][0]["properties"]
     assert props["color"] in ("#ef4d4d", "#f2b23e", "#a8d841", "#3fdc74")
     assert props["method"] == "threshold-based, unvalidated"
+    assert "priority_terms" in props
 
     confirmed = tc.get("/api/v1/roads/ranking",
                        params={"confirmed_only": "true"}).json()
     assert all(r["confirmed"] for r in confirmed)
+    assert "priority_terms" in ranking[0]
+    assert "vehicle_types" in ranking[0]
 
     dash = tc.get("/priority-map")
     assert dash.status_code == 200

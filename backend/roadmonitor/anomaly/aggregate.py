@@ -90,6 +90,7 @@ def compute(store, cfg) -> dict:
             "segment_id": seg_id,
             "n_events": len(evs),
             "n_trips": len(trips),
+            "solid_trip_count": len(solid_trips),
             "n_vehicle_types": len(vtypes),
             "sev_mean": round(sum(sevs) / len(sevs), 4),
             "sev_p95": round(_pct(sevs, 95), 4),

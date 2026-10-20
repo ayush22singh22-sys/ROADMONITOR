@@ -229,13 +229,19 @@ Chain: `ingest -> detect -> severity -> mapmatch -> aggregate -> priority`
 - **aggregate** (`anomaly/aggregate.py`): per-segment counts, mean/p95
   severity, unique trips + vehicle types; **confirmed needs >= 3 independent
   trips** (`min_confirm_trips`); events within `boundary_grace_m` (200 m) of
-  a trip's recorded start/end are flagged - the app's 150 m privacy trim
-  makes that region sparse and it cannot confirm a segment.
-- **priority** (`anomaly/priority.py`, in `config.yaml anomaly.priority_weights`):
-  `w1*severity + w2*frequency + w3*POI + w4*road_class + w5*vulnerable_users`.
-  POI impact is measured **along the road network** (graph distance, not
-  straight-line) within `poi_buffer_m` (250 m); weights sum to 1 and are
-  AHP-tunable.
+  a trip's recorded start/end are flagged and excluded from confirmation and
+  priority evidence. The app's 150 m privacy trim makes that region sparse.
+- **priority** (`anomaly/priority.py`, configured in
+  `config.yaml → anomaly.priority_weights`): `0.45*severity +
+  0.20*frequency + 0.20*POI + 0.10*road_class + 0.05*vulnerable_users`.
+  Severity blends event-severity p95 (70%) and mean (30%); frequency is the
+  number of distinct non-boundary trips, capped at the three-trip confirmation
+  threshold. POI impact uses the highest-weight POI within `poi_buffer_m`
+  (250 m along the road graph); POIs more than `poi_snap_max_distance_m`
+  (100 m) from the network are ignored. Vulnerable-user proximity is scored
+  independently from the highest-weight POI. All components are stored and
+  returned for inspection. Values remain provisional until calibrated against
+  field inspections; the score is a ranking index, not a probability.
 
 ### API (additive group, no legacy endpoint touched)
 ```
@@ -244,8 +250,8 @@ POST /api/v1/roads/network                                   # upload GeoJSON ne
 POST /api/v1/roads/recompute                                 # aggregate + priority run
 GET  /api/v1/roads/segments?min_priority=&poi_type=&within_m=&vehicle_type=&confirmed_only=
 GET  /api/v1/roads/ranking                                   # ranked repair list
-GET  /api/v1/roads/geojson                                   # map features, priority-coloured
-GET  /priority-map                                           # Leaflet dashboard (OSM tiles)
+GET  /api/v1/roads/geojson                                   # map features, priority-coloured + score terms
+GET  /priority-map                                           # responsive map, score legend, filters + breakdown
 ```
 
 ### Demo without any real data

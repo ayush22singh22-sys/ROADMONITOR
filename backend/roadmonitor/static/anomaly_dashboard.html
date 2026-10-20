@@ -3,118 +3,334 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Road Monitor — Anomaly Priority Map</title>
+<title>Road Monitor — Repair Priority</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
-  :root { --bg:#0f1420; --panel:#171e2e; --text:#dbe4f0; --muted:#8fa0b8; }
-  * { box-sizing:border-box; }
-  body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--text); display:flex; height:100vh; }
-  #map { flex:1; }
-  .side { width:430px; background:var(--panel); overflow-y:auto; padding:14px; border-left:1px solid #26314a; }
-  h1 { font-size:16px; margin:0 0 10px; }
-  .bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
-  select, button { background:#232c42; color:var(--text); border:1px solid #33405e; border-radius:6px; padding:5px 9px; cursor:pointer; }
-  label { font-size:12px; color:var(--muted); }
-  table { width:100%; border-collapse:collapse; font-size:12.5px; }
-  th { text-align:left; color:var(--muted); font-weight:600; padding:4px 6px; border-bottom:1px solid #33405e; position:sticky; top:0; background:var(--panel); }
-  td { padding:4px 6px; border-bottom:1px solid #223047; }
-  tr.row:hover { background:#202a40; cursor:pointer; }
-  .pill { border-radius:9px; padding:1px 7px; font-size:11px; background:#223049; }
-  .confirmed { background:#245c39; }
-  .muted { color:var(--muted); font-size:11.5px; }
-  #stats { color:var(--muted); font-size:12.5px; margin-bottom:8px; }
+  :root {
+    color-scheme: dark;
+    --bg: #0b1220; --panel: #111b2c; --panel-2: #18253a;
+    --text: #e8eef8; --muted: #9aabc3; --line: #293951;
+    --green: #32c982; --lime: #b1d949; --amber: #f2b34c; --red: #f05a5a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; overflow: hidden;
+    color: var(--text); background: var(--bg); font: 13px/1.45 system-ui, sans-serif; }
+  #map { flex: 1; min-width: 0; background: #d9e0e7; }
+  .side { width: min(540px, 47vw); min-width: 390px; display: flex;
+    flex-direction: column; background: var(--panel); border-left: 1px solid var(--line); }
+  header { padding: 16px 18px 12px; border-bottom: 1px solid var(--line); }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .01em; }
+  h2 { font-size: 13px; margin: 0 0 9px; }
+  .subtitle { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .content { overflow: auto; padding: 12px 16px 20px; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+  .card { border: 1px solid var(--line); background: var(--panel-2); border-radius: 9px; padding: 10px; }
+  .card .label { color: var(--muted); font-size: 11px; }
+  .card strong { display: block; margin-top: 2px; font-size: 20px; font-variant-numeric: tabular-nums; }
+  .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0; }
+  input, select, button { min-height: 34px; border: 1px solid #354761; border-radius: 7px;
+    padding: 6px 9px; background: #17243a; color: var(--text); font: inherit; }
+  input::placeholder { color: #899ab2; }
+  button { cursor: pointer; font-weight: 600; }
+  button:hover { background: #243650; }
+  button:disabled { opacity: .6; cursor: wait; }
+  .check { grid-column: 1 / -1; color: var(--muted); display: flex; align-items: center; gap: 7px; }
+  .check input { min-height: auto; }
+  .actions { display: flex; gap: 8px; }
+  .actions button { flex: 1; }
+  .status { min-height: 19px; margin: 8px 0; color: var(--muted); font-size: 12px; }
+  .error { color: #ff9e9e; }
+  .legend, .formula { border: 1px solid var(--line); background: var(--panel-2);
+    border-radius: 9px; padding: 10px 11px; margin: 10px 0; }
+  .legend-row { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 11px; }
+  .gradient { height: 8px; border-radius: 10px; margin: 7px 0 4px;
+    background: linear-gradient(90deg, var(--green), var(--lime), var(--amber), var(--red)); }
+  .formula p { color: var(--muted); font-size: 11.5px; margin: 4px 0; }
+  .formula strong { color: var(--text); }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; white-space: nowrap; }
+  th { position: sticky; top: 0; z-index: 1; background: #1a2940; color: var(--muted);
+    font-weight: 600; text-align: left; }
+  th, td { padding: 8px 7px; border-bottom: 1px solid var(--line); }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #1b2b43; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .score { font-weight: 750; }
+  .pill { border-radius: 20px; padding: 2px 7px; font-size: 10px; font-weight: 700; }
+  .pill.confirmed { color: #a3f0c7; background: #16442f; }
+  .pill.candidate { color: #f6d28e; background: #4a3820; }
+  .empty { color: var(--muted); text-align: center; padding: 20px 8px; }
+  .leaflet-popup-content-wrapper, .leaflet-popup-tip { background: #111b2c; color: var(--text); }
+  .leaflet-popup-content { margin: 12px 14px; line-height: 1.55; }
+  .leaflet-popup-content .muted { color: var(--muted); }
+  .leaflet-control-attribution { font-size: 10px !important; }
+  @media (max-width: 760px) {
+    body { flex-direction: column; overflow: auto; height: 100dvh; }
+    #map { flex: none; width: 100%; height: 44dvh; }
+    .side { width: 100%; min-width: 0; flex: 1; border-left: 0; border-top: 1px solid var(--line); }
+    .content { overflow: visible; }
+  }
 </style>
 </head>
 <body>
-  <div id="map"></div>
-  <div class="side">
-    <h1>Repair-priority map (rule-based, unvalidated)</h1>
-    <div id="stats">loading…</div>
-    <div class="bar">
-      <select id="f-poi"><option value="">POI: any</option>
-        <option>hospital</option><option>school</option><option>college</option>
-        <option>university</option><option>dormitory</option>
-        <option>marketplace</option><option>bus_station</option></select>
-      <select id="f-veh"><option value="">vehicle: any</option>
-        <option>bike</option><option>car</option><option>bus</option>
-        <option>e_rickshaw</option></select>
-      <label><input type="checkbox" id="f-conf" checked> confirmed only</label>
-      <button onclick="load()">⟳ refresh</button>
-      <button onclick="recompute()" title="re-run network+aggregate+priority">⚙ recompute</button>
-    </div>
-    <table>
-      <thead><tr><th>#</th><th>road</th><th class="num">sev</th><th>nearest POI</th><th class="num">trips</th><th class="num">prio</th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
-    <p class="muted">priority = w·severity + w·frequency + w·POI(250 m along-network) + w·road class + w·vulnerable users.
-       Thresholds per vehicle type in config.yaml. No accuracy claim: validation pending.</p>
-  </div>
+  <div id="map" role="application" aria-label="Road repair priority map"></div>
+  <aside class="side">
+    <header>
+      <h1>Repair-priority map</h1>
+      <div class="subtitle">Ranked road segments · rule-based estimate, not a validated engineering assessment</div>
+    </header>
+    <main class="content">
+      <div class="cards">
+        <div class="card"><span class="label">Segments shown</span><strong id="count-shown">—</strong></div>
+        <div class="card"><span class="label">Confirmed</span><strong id="count-confirmed">—</strong></div>
+        <div class="card"><span class="label">Mean priority</span><strong id="mean-priority">—</strong></div>
+      </div>
+      <div class="filters">
+        <input id="f-search" type="search" placeholder="Search road or POI" aria-label="Search road or POI">
+        <select id="f-poi" aria-label="Filter by nearby point of interest">
+          <option value="">All nearby POIs</option>
+          <option value="hospital">Hospital</option><option value="school">School</option>
+          <option value="college">College</option><option value="university">University</option>
+          <option value="dormitory">Dormitory</option><option value="marketplace">Marketplace</option>
+          <option value="bus_station">Bus station</option>
+        </select>
+        <select id="f-veh" aria-label="Filter by vehicle type">
+          <option value="">All vehicle types</option><option value="bike">Bike</option>
+          <option value="car">Car</option><option value="bus">Bus</option>
+          <option value="e_rickshaw">E-rickshaw</option>
+        </select>
+        <select id="f-sort" aria-label="Sort results">
+          <option value="priority">Sort: highest priority</option>
+          <option value="severity">Sort: highest severity</option>
+          <option value="trips">Sort: most supporting trips</option>
+          <option value="name">Sort: road name</option>
+        </select>
+        <label class="check"><input type="checkbox" id="f-conf" checked> Confirmed segments only (at least 3 trips)</label>
+      </div>
+      <div class="actions">
+        <button id="refresh" type="button">Refresh data</button>
+        <button id="recompute" type="button">Recompute priorities</button>
+      </div>
+      <div id="status" class="status" role="status" aria-live="polite">Loading road priority…</div>
+      <section class="legend" aria-label="Map legend">
+        <h2>Priority score · 0–1</h2>
+        <div class="gradient"></div>
+        <div class="legend-row"><span>Lower</span><span>Higher</span></div>
+      </section>
+      <section class="formula">
+        <h2>How the score is calculated</h2>
+        <p><strong>Score =</strong> <span id="formula-weights">45% × severity + 20% × trip evidence + 20% × nearby POI + 10% × road class + 5% × vulnerable users</span>.</p>
+        <p>Severity blends event-severity p95 (<span id="p95-weight">70</span>%) and mean (<span id="mean-weight">30</span>%). Trip evidence uses distinct trips away from trip boundaries, capped at <span id="confirm-trips">3</span>. POI distance follows the road network within <span id="poi-buffer">250</span> m; POIs more than <span id="poi-snap">100</span> m from that network are ignored.</p>
+        <p>Weights and distance limits are configured server-side. These are provisional rules, not calibrated probabilities; validate against field inspections before making repair decisions.</p>
+      </section>
+      <h2>Ranked segments</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>Road / status</th><th class="num">Priority</th><th class="num">Severity</th><th class="num">Trips</th><th>POI</th></tr></thead>
+          <tbody id="rows"><tr><td class="empty" colspan="6">Loading…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="subtitle" style="margin-top:8px">Select a row or road line to zoom and inspect score components.</div>
+    </main>
+  </aside>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const map = L.map('map');
+const map = L.map('map', {preferCanvas: true}).setView([26.2183, 78.1828], 13);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
   {attribution:'© OpenStreetMap contributors', maxZoom:19}).addTo(map);
-const layers = [];
+const lineLayer = L.featureGroup().addTo(map);
 const API = '/api/v1/roads';
+let features = [];
+let ranking = [];
+let requestId = 0;
+
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pct = value => `${(Number(value || 0) * 100).toFixed(0)}%`;
+const colorFor = value => value >= 0.75 ? '#f05a5a'
+  : value >= 0.55 ? '#f2b34c' : value >= 0.35 ? '#b1d949' : '#32c982';
+
+async function getJson(url, options) {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Request failed (${response.status}): ${detail.slice(0, 240)}`);
+  }
+  return response.json();
+}
 
 async function load() {
-  layers.forEach(l => map.removeLayer(l)); layers.length = 0;
-  const poi = document.getElementById('f-poi').value;
-  const veh = document.getElementById('f-veh').value;
-  const conf = document.getElementById('f-conf').checked;
-  const g = await fetch(`${API}/geojson${conf ? '?confirmed_only=true' : ''}`).then(r => r.json());
-  const ranking = await fetch(`${API}/ranking?confirmed_only=${conf}&vehicle_type=${veh}`).then(r => r.json());
-  const shown = ranking.filter(r => !poi || r.poi_type === poi);
+  const currentRequest = ++requestId;
+  $('status').className = 'status';
+  $('status').textContent = 'Loading road segments…';
+  try {
+    const [geo, ranked] = await Promise.all([
+      getJson(`${API}/geojson?min_priority=0`),
+      getJson(`${API}/ranking?limit=1000`),
+    ]);
+    if (currentRequest !== requestId) return;
+    features = geo.features || [];
+    ranking = ranked || [];
+    showFormula(ranking[0]?.priority_terms);
+    render();
+    $('status').textContent = `Updated ${new Date().toLocaleTimeString()} · ${features.length} scored segments available`;
+  } catch (error) {
+    if (currentRequest !== requestId) return;
+    $('status').className = 'status error';
+    $('status').textContent = error.message;
+    $('rows').innerHTML = '<tr><td class="empty" colspan="6">Could not load priority data. Check the server and try refresh.</td></tr>';
+  }
+}
 
-  let bounds = null;
-  g.features.forEach(f => {
-    const latlngs = f.geometry.coordinates.map(c => [c[1], c[0]]);
-    const p = f.properties;
-    if (p.priority == null || p.priority === undefined || p.priority < 0) return;
-    const line = L.polyline(latlngs, {color: p.color || '#888', weight: 7, opacity: 0.9}).addTo(map);
-    line.bindPopup(`<b>${p.name || p.segment_id}</b><br>
-      priority <b>${(+p.priority).toFixed(3)}</b> · class ${p.road_class || ''}<br>
-      severity(p95) ${(+p.sev_p95).toFixed(2)} · ${p.n_trips} trips · ${p.n_events} events<br>
-      ${p.confirmed ? '<span style="color:#7fe05f">confirmed</span>' : 'candidate'}
-      <br><span class="muted">threshold-based, unvalidated</span>`);
-    layers.push(line);
-    bounds = bounds ? bounds.extend(latlngs) : L.latLngBounds(latlngs);
+function filteredRanking() {
+  const poi = $('f-poi').value;
+  const vehicle = $('f-veh').value;
+  const confirmed = $('f-conf').checked;
+  const query = $('f-search').value.trim().toLowerCase();
+  const result = ranking.filter(row => {
+    const terms = row.priority_terms || {};
+    if (confirmed && !row.confirmed) return false;
+    if (poi && row.poi_type !== poi) return false;
+    if (vehicle && !(row.vehicle_types || []).includes(vehicle)) return false;
+    return !query || `${row.road_name || ''} ${row.nearest_poi || ''} ${row.segment_id}`.toLowerCase().includes(query);
   });
-  if (bounds) map.fitBounds(bounds.pad(0.2));
-  else map.setView([26.2183, 78.1828], 14);
+  const key = $('f-sort').value;
+  result.sort((a, b) => key === 'severity' ? (b.severity || 0) - (a.severity || 0)
+    : key === 'trips' ? (b.solid_trip_count || 0) - (a.solid_trip_count || 0)
+    : key === 'name' ? String(a.road_name || a.segment_id).localeCompare(String(b.road_name || b.segment_id))
+    : (b.priority || 0) - (a.priority || 0));
+  return result;
+}
 
-  document.getElementById('stats').textContent =
-    `${shown.length} ranked · ${g.features.length} scored segments` + (poi ? ` · near ${poi}` : '');
+function scoreDetails(row) {
+  const t = row.priority_terms || {};
+  const w = t.weights || {severity:.45, frequency:.20, poi:.20, road_class:.10, vulnerable:.05};
+  const labels = [
+    ['Severity', t.severity, w.severity],
+    ['Trip evidence', t.frequency, w.frequency],
+    ['POI impact', t.poi, w.poi],
+    ['Road class', t.road_class, w.road_class],
+    ['Vulnerable users', t.vulnerable, w.vulnerable],
+  ];
+  return labels.map(([label, value, weight]) =>
+    `<div>${esc(label)}: ${pct(value)} × ${(Number(weight || 0) * 100).toFixed(0)}% weight</div>`).join('');
+}
 
-  const tb = document.getElementById('rows'); tb.innerHTML = '';
-  const byId = {};
-  g.features.forEach(f => { byId[f.properties.segment_id] = f; });
-  shown.slice(0, 200).forEach(r => {
-    const tr = document.createElement('tr'); tr.className = 'row';
-    tr.innerHTML = `<td>${r.rank}</td>
-      <td>${r.road_name || r.segment_id.slice(0,10)} ${r.confirmed ? '<span class="pill confirmed">✓</span>' : '<span class="pill">~</span>'}</td>
-      <td class="num">${r.severity == null ? '—' : (+r.severity).toFixed(2)}</td>
-      <td class="muted">${r.nearest_poi || '—'}</td>
-      <td class="num">${r.trip_count ?? '—'}</td>
-      <td class="num"><b>${r.priority?.toFixed(3)}</b></td>`;
-    tr.onclick = () => {
-      const f = byId[r.segment_id];
-      if (!f) return;
-      const lls = f.geometry.coordinates.map(c => [c[1], c[0]]);
-      map.fitBounds(L.latLngBounds(lls).pad(0.5), {maxZoom: 18});
-    };
-    tb.appendChild(tr);
+function showFormula(terms) {
+  if (!terms || !terms.weights) return;
+  const labels = [
+    ['severity', 'severity'], ['frequency', 'trip evidence'], ['poi', 'nearby POI'],
+    ['road_class', 'road class'], ['vulnerable', 'vulnerable users'],
+  ];
+  $('formula-weights').textContent = labels.map(([key, label]) =>
+    `${(Number(terms.weights[key] || 0) * 100).toFixed(0)}% × ${label}`).join(' + ');
+  $('p95-weight').textContent = (Number(terms.severity_p95_weight ?? .7) * 100).toFixed(0);
+  $('mean-weight').textContent = (100 - Number(terms.severity_p95_weight ?? .7) * 100).toFixed(0);
+  $('confirm-trips').textContent = terms.min_confirm_trips ?? 3;
+  $('poi-buffer').textContent = terms.poi_buffer_m ?? 250;
+  $('poi-snap').textContent = terms.poi_snap_max_distance_m ?? 100;
+}
+
+function popup(row) {
+  const t = row.priority_terms || {};
+  const road = esc(row.road_name || row.segment_id);
+  const poi = row.nearest_poi
+    ? `${esc(row.nearest_poi)} (${esc(row.poi_type)}, ${Number(row.poi_dist_m || 0).toFixed(0)} m along road)`
+    : 'No qualifying nearby POI';
+  return `<strong>${road}</strong><br>
+    Priority <b>${pct(row.priority)}</b> · ${row.confirmed ? 'confirmed' : 'candidate'}<br>
+    Severity ${pct(row.severity)} · ${row.solid_trip_count || 0} supporting trips · ${row.n_events || 0} events<br>
+    Nearby POI: ${poi}<hr>
+    <div class="muted">${scoreDetails(row)}</div>
+    <div class="muted" style="margin-top:6px">Rule-based estimate; not a validated probability.</div>`;
+}
+
+function render() {
+  const rows = filteredRanking();
+  const byId = new Map(rows.map(row => [row.segment_id, row]));
+  const shownFeatures = features.filter(feature => byId.has(feature.properties.segment_id));
+  lineLayer.clearLayers();
+  let bounds = null;
+
+  shownFeatures.forEach(feature => {
+    const row = byId.get(feature.properties.segment_id);
+    const coords = feature.geometry.coordinates.map(c => [c[1], c[0]]);
+    if (!coords.length) return;
+    const line = L.polyline(coords, {
+      color: colorFor(row.priority), weight: 5 + Math.min(3, Number(row.priority || 0) * 4),
+      opacity: row.confirmed ? .94 : .62, dashArray: row.confirmed ? null : '7 6',
+    }).addTo(lineLayer);
+    line.bindPopup(popup(row));
+    line.on('click', () => {
+      document.querySelectorAll('tbody tr.selected').forEach(el => el.classList.remove('selected'));
+      const tableRow = document.querySelector(`tr[data-segment="${CSS.escape(row.segment_id)}"]`);
+      if (tableRow) tableRow.classList.add('selected');
+    });
+    bounds = bounds ? bounds.extend(coords) : L.latLngBounds(coords);
+  });
+
+  if (bounds && bounds.isValid()) map.fitBounds(bounds.pad(.12), {maxZoom: 17});
+  else map.setView([26.2183, 78.1828], 13);
+
+  const confirmedCount = rows.filter(row => row.confirmed).length;
+  const mean = rows.length ? rows.reduce((sum, row) => sum + Number(row.priority || 0), 0) / rows.length : 0;
+  $('count-shown').textContent = rows.length;
+  $('count-confirmed').textContent = confirmedCount;
+  $('mean-priority').textContent = rows.length ? pct(mean) : '—';
+
+  const tbody = $('rows');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td class="empty" colspan="6">No segments match these filters.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.slice(0, 200).map((row, index) => `
+    <tr data-segment="${esc(row.segment_id)}">
+      <td>${index + 1}</td>
+      <td>${esc(row.road_name || row.segment_id.slice(0, 12))}
+        <span class="pill ${row.confirmed ? 'confirmed' : 'candidate'}">${row.confirmed ? 'confirmed' : 'candidate'}</span>
+      </td>
+      <td class="num score" style="color:${colorFor(row.priority)}">${pct(row.priority)}</td>
+      <td class="num">${pct(row.severity)}</td>
+      <td class="num">${row.solid_trip_count ?? row.trip_count ?? 0}</td>
+      <td>${esc(row.nearest_poi || '—')}</td>
+    </tr>`).join('');
+  tbody.querySelectorAll('tr[data-segment]').forEach((tr, index) => {
+    tr.addEventListener('click', () => {
+      const row = rows[index];
+      const feature = shownFeatures.find(f => f.properties.segment_id === row.segment_id);
+      if (!feature) return;
+      const coords = feature.geometry.coordinates.map(c => [c[1], c[0]]);
+      map.fitBounds(L.latLngBounds(coords).pad(.4), {maxZoom: 18});
+      const layer = lineLayer.getLayers().find(l => l.getPopup()?.getContent() === popup(row));
+      if (layer) layer.openPopup();
+    });
   });
 }
 
 async function recompute() {
-  document.getElementById('stats').textContent = 'recomputing…';
-  await fetch(`${API}/recompute?mode=auto`, {method:'POST'});
-  load();
+  const button = $('recompute');
+  button.disabled = true;
+  $('status').className = 'status';
+  $('status').textContent = 'Recomputing network matches, aggregates, and priorities…';
+  try {
+    const result = await getJson(`${API}/recompute?mode=auto`, {method:'POST'});
+    $('status').textContent = `Recomputed ${result.prioritised ?? result.scored ?? 0} segments · refreshing map…`;
+    await load();
+  } catch (error) {
+    $('status').className = 'status error';
+    $('status').textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
 }
-document.getElementById('f-poi').onchange = load;
-document.getElementById('f-veh').onchange = load;
-document.getElementById('f-conf').onchange = load;
+
+['f-search', 'f-poi', 'f-veh', 'f-conf', 'f-sort'].forEach(id => {
+  $(id).addEventListener(id === 'f-search' ? 'input' : 'change', render);
+});
+$('refresh').addEventListener('click', load);
+$('recompute').addEventListener('click', recompute);
 load();
 </script>
 </body>

@@ -309,9 +309,13 @@ def roads_ranking(min_priority: float = 0.0, confirmed_only: bool = False,
     sql += " ORDER BY st.priority DESC LIMIT ?"
     args.append(max(1, min(limit, 1000)))
     out = []
-    rank0 = None
     rows = [dict(r) for r in store.conn.execute(sql, args)]
     rows.sort(key=lambda r: (-(r["priority"] or 0.0), -(r["sev_p95"] or 0.0)))
+    vehicle_types = {}
+    for vehicle_type, segment_id in store.conn.execute(
+            "SELECT DISTINCT vehicle_type, segment_id FROM anomaly_events"
+            " WHERE vehicle_type IS NOT NULL AND segment_id IS NOT NULL"):
+        vehicle_types.setdefault(segment_id, []).append(vehicle_type)
     for i, r in enumerate(rows, 1):
         comps = json.loads(r.pop("components") or "{}") or {}
         terms = comps.get("priority_terms") or {}
@@ -319,14 +323,20 @@ def roads_ranking(min_priority: float = 0.0, confirmed_only: bool = False,
             "rank": i,
             "road_name": r.get("name"),
             "segment_id": r["segment_id"],
-            "severity": r.get("sev_p95"),
+            "severity": terms.get("severity", r.get("sev_p95")),
+            "severity_p95": r.get("sev_p95"),
+            "severity_mean": r.get("sev_mean"),
             "nearest_poi": terms.get("poi_name"),
             "poi_type": terms.get("poi_type"),
             "poi_dist_m": terms.get("poi_dist_m"),
             "priority": r.get("priority"),
             "trip_count": r.get("n_trips"),
+            "solid_trip_count": terms.get("solid_trip_count", r.get("n_trips")),
             "n_events": r.get("n_events"),
+            "road_class": r.get("road_class"),
+            "vehicle_types": vehicle_types.get(r["segment_id"], []),
             "confirmed": bool(r.get("confirmed")),
+            "priority_terms": terms,
             "method": "threshold-based, unvalidated",
         })
     return out
@@ -339,7 +349,7 @@ def roads_geojson(min_priority: float = 0.0, confirmed_only: bool = False):
     from .anomaly.schema import ensure_tables
     ensure_tables(store)
     sql = ("SELECT st.priority, st.sev_mean, st.sev_p95, st.n_events, st.n_trips,"
-           " st.confirmed, ns.segment_id, ns.geom, ns.name, ns.road_class"
+           " st.confirmed, st.components, ns.segment_id, ns.geom, ns.name, ns.road_class"
            " FROM segment_stats st JOIN net_segments ns ON"
            " ns.segment_id = st.segment_id WHERE st.priority >= ?")
     args = [min_priority]
@@ -348,10 +358,14 @@ def roads_geojson(min_priority: float = 0.0, confirmed_only: bool = False):
     feats = []
     for r in store.conn.execute(sql, args):
         d = dict(r)
+        components = json.loads(d.pop("components") or "{}") or {}
+        terms = components.get("priority_terms") or {}
         props = {"segment_id": d["segment_id"], "name": d["name"],
                  "road_class": d["road_class"], "priority": d["priority"],
                  "sev_p95": d["sev_p95"], "n_trips": d["n_trips"],
+                 "solid_trip_count": terms.get("solid_trip_count", d["n_trips"]),
                  "n_events": d["n_events"], "confirmed": bool(d["confirmed"]),
+                 "priority_terms": terms,
                  "color": _color(d["priority"] or 0.0),
                  "method": "threshold-based, unvalidated"}
         feats.append({"type": "Feature",

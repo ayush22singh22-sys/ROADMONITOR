@@ -7,16 +7,17 @@ set them formally later via AHP pairwise comparison; the formula needs no
 change when the weights change (that is the point of keeping them in
 config.yaml).
 
-  severity   - segment sev_p95 ("threshold-based, unvalidated")
-  frequency  - min(1, n_trips / min_confirm_trips): more independent runs
-               witnessing the defect -> higher confidence in prevalence
+  severity   - weighted blend of segment sev_p95 and sev_mean
+  frequency  - min(1, solid_trip_count / min_confirm_trips); boundary events
+               do not add evidence because the privacy trim reduces coverage
   poi        - highest POI weight (hospital 1.0, school 0.9, hostel/college/
                university 0.7, marketplace/bus_stand 0.6) among POIs within
                poi_buffer_m measured ALONG THE ROAD NETWORK (graph distance
-               from the segment's endpoint nodes), not straight-line
+               from the segment's endpoint nodes), not straight-line; POIs
+               must also snap to the network within poi_snap_max_distance_m
   road_class - class weight (primary 1.0 ... service 0.2) from OSM highway
-  vulnerable - 1.0 if any vulnerable-users POI (school/hospital/college/
-               university/dormitory) is within the buffer else 0.0
+  vulnerable - independently 1.0 if any vulnerable-users POI (school/
+               hospital/college/university/dormitory) is within the buffer
 
 Network distance: Dijkstra over the road graph (nodes = segment endpoints,
 edge length = polyline length), multi-source from each POI anchored to its
@@ -67,41 +68,49 @@ def _dijkstra(graph, sources: dict, limit: float) -> dict:
     return dist
 
 
-def snap_poi_to_graph(poi: dict, net: dict, index=None) -> tuple:
-    """Anchors a POI to its nearest edge, returning virtual nodes
-    {u: d_from_u, v: length - d_from_u} so the buffer measures along the
-    road, not as the crow flies. Virtual nodes never enter net_segments."""
-    from .mapmatch import _bbox_segments, point_to_polyline_m
-    if index is None:
-        index, _ = _bbox_segments(net["segments"])
-    best, best_d = None, float("inf")
-    for i, s in enumerate(net["segments"]):
-        d = point_to_polyline_m(poi["lat"], poi["lon"], s["coords"])
-        if d < best_d:
-            best, best_d = s, d
-    if best is None:
-        return {}
-    # along-edge distance of the perpendicular foot:
-    coords = best["coords"]
-    cum = [0.0]
+def _project_onto_segment(lat: float, lon: float, coords: list) -> tuple:
+    """Return the nearest point's distance and along-polyline offset in metres."""
     from .roadnet import polyline_length_m
-    for j in range(len(coords) - 1):
-        cum.append(cum[-1] + polyline_length_m([coords[j], coords[j + 1]]))
-    lo, hi = 0, len(coords) - 1
-    best_along, best_seg_d = 0.0, float("inf")
-    for j in range(hi):
-        # approximate: pick the carbon endpoint projection
-        for f in range(11):
-            frac = f / 10.0
-            la = coords[j][0] + (coords[j + 1][0] - coords[j][0]) * frac
-            lo_ = coords[j][1] + (coords[j + 1][1] - coords[j][1]) * frac
-            from math import cos, radians
-            d = math.hypot((la - poi["lat"]) * 110574.0,
-                           (lo_ - poi["lon"]) * 111320.0 * cos(radians(poi["lat"])))
-            if d < best_seg_d:
-                best_seg_d = d
-                best_along = cum[j] + frac * (cum[j + 1] - cum[j])
-    L = best.get("length_m") or cum[-1]
+
+    clat = sum(c[0] for c in coords) / len(coords)
+    kx = 111_320.0 * math.cos(math.radians(clat))
+    ky = 110_574.0
+    px, py = lon * kx, lat * ky
+    best_d, best_along, cumulative = float("inf"), 0.0, 0.0
+    for a, b in zip(coords, coords[1:]):
+        ax, ay = a[1] * kx, a[0] * ky
+        bx, by = b[1] * kx, b[0] * ky
+        dx, dy = bx - ax, by - ay
+        length_sq = dx * dx + dy * dy
+        fraction = (0.0 if length_sq == 0 else
+                    max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy)
+                                 / length_sq)))
+        d = math.hypot(px - (ax + fraction * dx),
+                       py - (ay + fraction * dy))
+        edge_length = polyline_length_m([a, b])
+        if d < best_d:
+            best_d = d
+            best_along = cumulative + fraction * edge_length
+        cumulative += edge_length
+    return best_d, best_along
+
+
+def snap_poi_to_graph(poi: dict, net: dict, index=None,
+                      max_distance_m: float = 100.0) -> dict:
+    """Anchors a nearby POI to its nearest edge, returning virtual nodes
+    {u: d_from_u, v: length - d_from_u}. Far-off POIs are rejected so an
+    unrelated location cannot raise a road's score."""
+    best, best_d = None, float("inf")
+    best_along = 0.0
+    for i, s in enumerate(net["segments"]):
+        d, along = _project_onto_segment(poi["lat"], poi["lon"], s["coords"])
+        if d < best_d:
+            best, best_d, best_along = s, d, along
+    if best is None or best_d > max_distance_m:
+        return {}
+    coords = best["coords"]
+    from .roadnet import polyline_length_m
+    L = best.get("length_m") or polyline_length_m(coords)
     u = (round(coords[0][0], 7), round(coords[0][1], 7))
     v = (round(coords[-1][0], 7), round(coords[-1][1], 7))
     return {u: best_along, v: max(0.0, L - best_along)}
@@ -113,7 +122,9 @@ def poi_impact(poi: dict, net: dict, index, cfg) -> dict:
     """Dijkstra-limited buffer for one POI: returns
     {segment_id: (weight, poi_name, poi_type, network_dist_m)} over the
     segments within poi_buffer_m measured along the road network."""
-    anchor = snap_poi_to_graph(poi, net, index)
+    anchor = snap_poi_to_graph(
+        poi, net, index,
+        max_distance_m=cfg["anomaly"].get("poi_snap_max_distance_m", 100.0))
     if not anchor:
         return {}
     graph = build_graph(net)
@@ -155,8 +166,11 @@ def compute(store, net: dict, cfg) -> dict:
         "SELECT * FROM net_pois").fetchall()]
     index, _ = _bbox_segments(net["segments"])
     poi_by_seg = {}
+    vulnerable_by_seg = set()
     for p in pois:
         for seg_id, (pw, pname, ptype, pd) in poi_impact(p, net, index, cfg).items():
+            if ptype in VULNERABLE_TYPES:
+                vulnerable_by_seg.add(seg_id)
             cur = poi_by_seg.get(seg_id)
             if cur is None or pw > cur[0]:
                 poi_by_seg[seg_id] = (pw, pname, ptype, pd)
@@ -172,12 +186,17 @@ def compute(store, net: dict, cfg) -> dict:
             "SELECT * FROM segment_stats").fetchall()]
         for st in rows:
             comps = _json.loads(st.get("components") or "{}")
-            severity = st.get("sev_p95") or 0.0
-            freq = min(1.0, (st.get("n_trips") or 0) / max(min_trips, 1))
+            p95_weight = cfg["anomaly"].get("severity_p95_weight", 0.7)
+            severity = (p95_weight * (st.get("sev_p95") or 0.0)
+                        + (1.0 - p95_weight) * (st.get("sev_mean") or 0.0))
+            solid_trip_count = comps.get("solid_trip_count")
+            if solid_trip_count is None:
+                solid_trip_count = st.get("n_trips") or 0
+            freq = min(1.0, solid_trip_count / max(min_trips, 1))
             cur = poi_by_seg.get(st["segment_id"], (0.0, None, "", None))
             poi_c = cur[0]
             poi_name, poi_type, poi_dist = cur[1], cur[2], cur[3]
-            vuln = 1.0 if poi_type in VULNERABLE_TYPES else 0.0
+            vuln = 1.0 if st["segment_id"] in vulnerable_by_seg else 0.0
             rc = class_w.get(road_class.get(st["segment_id"], "unclassified"), 0.4)
             priority = (w["severity"] * severity + w["frequency"] * freq
                         + w["poi"] * poi_c + w["road_class"] * rc
@@ -185,14 +204,24 @@ def compute(store, net: dict, cfg) -> dict:
             components = {
                 "priority_terms": {
                     "severity": round(severity, 4),
+                    "severity_p95": round(st.get("sev_p95") or 0.0, 4),
+                    "severity_mean": round(st.get("sev_mean") or 0.0, 4),
                     "frequency": round(freq, 4),
+                    "solid_trip_count": solid_trip_count,
+                    "reported_trip_count": st.get("n_trips") or 0,
+                    "boundary_events": comps.get("boundary_events", 0),
                     "poi": poi_c,
                     "poi_name": poi_name,
                     "poi_type": poi_type,
                     "poi_dist_m": round(poi_dist, 1) if poi_dist is not None else None,
+                    "poi_snap_max_distance_m": cfg["anomaly"].get(
+                        "poi_snap_max_distance_m", 100.0),
+                    "poi_buffer_m": cfg["anomaly"]["poi_buffer_m"],
                     "road_class": rc,
                     "vulnerable": vuln,
+                    "weights": w,
                     "min_confirm_trips": min_trips,
+                    "severity_p95_weight": p95_weight,
                     "method": "threshold-based, unvalidated",
                 },
                 **comps,

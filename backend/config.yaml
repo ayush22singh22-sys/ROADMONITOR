@@ -64,6 +64,8 @@ anomaly:
   boundary_grace_m: 200       # events this close to a trip start/end (post-trim)
                               # are flagged and cannot confirm a segment
   poi_buffer_m: 250           # POI impact buffer, measured ALONG the road graph
+  poi_snap_max_distance_m: 100 # ignore POIs too far from the mapped road network
+  severity_p95_weight: 0.7    # blend robust event severity: 70% p95 + 30% mean
   poi_weights:                # AHP-tunable site policy
     hospital: 1.0
     school: 0.9
